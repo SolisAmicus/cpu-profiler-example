@@ -6,10 +6,12 @@ import (
 	"runtime/pprof"
 )
 
+// MockSingleCPULoad A goroutine with only one label
 func MockSingleCPULoad(ctx context.Context, label string) {
 	go mockCPULoadByGoroutineWithLabel(ctx, "label", label)
 }
 
+// MockMultiCPULoad A goroutine with multiple labels
 func MockMultiCPULoad(ctx context.Context, labels ...string) {
 	lvs := []string{}
 	for _, label := range labels {
