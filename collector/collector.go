@@ -1,9 +1,9 @@
 package collector
 
 import (
+	"CPUProfiler/cpuprofile"
 	"context"
-	"os"
-	"runtime/pprof"
+	"fmt"
 	"sync"
 	"time"
 
@@ -24,11 +24,12 @@ type Collector interface {
 }
 
 type CPUCollector struct {
-	ctx       context.Context
-	collector Collector
-	cancel    context.CancelFunc
-	wg        sync.WaitGroup
-	started   bool
+	ctx        context.Context
+	collector  Collector
+	cancel     context.CancelFunc
+	wg         sync.WaitGroup
+	started    bool
+	registered bool
 }
 
 func NewCPUCollector(c Collector) *CPUCollector {
@@ -36,10 +37,6 @@ func NewCPUCollector(c Collector) *CPUCollector {
 		collector: c,
 	}
 }
-
-var defCollectTickerInterval = time.Second
-
-var defProfileDuration = 500 * time.Millisecond
 
 func (cc *CPUCollector) Start() {
 	if cc.started {
@@ -49,6 +46,7 @@ func (cc *CPUCollector) Start() {
 	cc.ctx, cc.cancel = context.WithCancel(context.Background())
 	cc.wg.Add(1)
 	go cc.collectCPULoop()
+	fmt.Println("cpu collector started")
 }
 
 func (cc *CPUCollector) Stop() {
@@ -60,60 +58,37 @@ func (cc *CPUCollector) Stop() {
 		cc.cancel()
 	}
 	cc.wg.Wait()
+	fmt.Println("cpu collector stopped")
 }
 
+var defCollectTickerInterval = time.Second
+
 func (cc *CPUCollector) collectCPULoop() {
-	profileConsumer := make(chan []byte, 1)
+	profileConsumer := make(cpuprofile.ProfileConsumer, 1)
 	ticker := time.NewTicker(defCollectTickerInterval)
 	defer func() {
 		cc.wg.Done()
+		cc.doUnregister(profileConsumer)
 		ticker.Stop()
 	}()
 
 	for {
+		cc.doRegister(profileConsumer)
 		select {
 		case <-cc.ctx.Done():
 			return
 		case <-ticker.C:
-			data, err := cc.captureCPUProfile()
-			if err != nil {
-				continue
-			}
-			if data != nil {
-				profileConsumer <- data
-			}
 		case data := <-profileConsumer:
 			cc.handleProfileData(data)
 		}
 	}
 }
 
-func (cc *CPUCollector) captureCPUProfile() ([]byte, error) {
-	f, err := os.CreateTemp("", "cpu_profile_*.prof")
-	if err != nil {
-		return nil, err
-	}
-	defer os.Remove(f.Name())
-
-	if err := pprof.StartCPUProfile(f); err != nil {
-		return nil, err
-	}
-	time.Sleep(defProfileDuration)
-	pprof.StopCPUProfile()
-
-	data, err := os.ReadFile(f.Name())
-	if err != nil {
-		return nil, err
-	}
-	return data, nil
-}
-
-func (cc *CPUCollector) handleProfileData(data []byte) {
-	err := os.WriteFile("collected_profile.prof", data, 0644)
-	if err != nil {
+func (cc *CPUCollector) handleProfileData(data *cpuprofile.ProfileData) {
+	if data.Error != nil {
 		return
 	}
-	p, err := profile.ParseData(data)
+	p, err := profile.ParseData(data.Data.Bytes())
 	if err != nil {
 		return
 	}
@@ -121,28 +96,34 @@ func (cc *CPUCollector) handleProfileData(data []byte) {
 	cc.collector.Collect(stats)
 }
 
-func (cc *CPUCollector) parseCPUProfileByLabels(p *profile.Profile) []CPUTimeRecord {
-	labelMap := make(map[string]int64)
-	idx := len(p.SampleType) - 1
-	for _, s := range p.Sample {
-		labels, ok := s.Label[labelKey]
-		if !ok || len(labels) == 0 {
-			continue
-		}
-		for _, label := range labels {
-			labelMap[label] += s.Value[idx]
-		}
+func (cc *CPUCollector) doRegister(profileConsumer cpuprofile.ProfileConsumer) {
+	if cc.registered {
+		return
 	}
-	return cc.createLabelStats(labelMap)
+	cc.registered = true
+	cpuprofile.Register(profileConsumer)
+}
+
+func (cc *CPUCollector) doUnregister(profileConsumer cpuprofile.ProfileConsumer) {
+	if !cc.registered {
+		return
+	}
+	cc.registered = false
+	cpuprofile.Unregister(profileConsumer)
+}
+
+func (cc *CPUCollector) parseCPUProfileByLabels(p *profile.Profile) []CPUTimeRecord {
+	// TODO
 }
 
 func (cc *CPUCollector) createLabelStats(labelMap map[string]int64) []CPUTimeRecord {
-	stats := make([]CPUTimeRecord, 0, len(labelMap))
-	for label, cpuTime := range labelMap {
-		stats = append(stats, CPUTimeRecord{
-			Label:     label,
-			CPUTimeMs: uint32(time.Duration(cpuTime).Milliseconds()),
-		})
-	}
-	return stats
+	// TODO
+}
+
+func CtxWithLabel(ctx context.Context, label string) context.Context {
+	// TODO
+}
+
+func CtxWithLabels(ctx context.Context, labels []string) context.Context {
+	// TODO
 }
